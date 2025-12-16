@@ -1,4 +1,4 @@
-# ComfyUI-Jimeng-API-Pandy
+﻿# ComfyUI-Jimeng-API-Pandy
 
 基于火山引擎视觉AI API的ComfyUI自定义节点集合，提供高质量的人脸替换功能。
 
@@ -118,6 +118,15 @@ pip install torch>=1.7.0
 详细API文档请参考：[火山引擎视觉AI API文档](https://www.volcengine.com/docs/82379/1399008#99a7c9ca)
 
 ## 更新日志
+
+
+### v2.1 (2024-12-16)
+- 🐛 **修复 Seedream 节点图片传入问题**：修复了从其他节点（如 PDIMAGE_LongerSize）传入图片时无法正确识别的问题
+  - 原因：	ensor_to_base64 函数使用 image_np.max() <= 1.0 判断图片值范围不可靠，当图片接近全黑时会误判
+  - 修复：改为检查数据类型 (
+p.float32/
+p.float64) 并添加 
+p.clip 确保值在有效范围内
 
 ### v2.0 (当前版本)
 - ✅ 支持直接在节点中输入API密钥

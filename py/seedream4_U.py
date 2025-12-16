@@ -1,4 +1,4 @@
-import os
+﻿import os
 import torch
 import numpy as np
 from PIL import Image
@@ -53,7 +53,7 @@ class Seedream_Universal4_5:
     def tensor_to_base64(self, tensor_image):
         if len(tensor_image.shape) == 4: tensor_image = tensor_image[0]
         image_np = tensor_image.cpu().numpy()
-        image_np = (image_np * 255).astype(np.uint8) if image_np.max() <= 1.0 else image_np.astype(np.uint8)
+        image_np = (np.clip(image_np, 0, 1) * 255).astype(np.uint8) if image_np.dtype in [np.float32, np.float64] else image_np.astype(np.uint8)
         if image_np.shape[-1] != 3: image_np = np.transpose(image_np, (1, 2, 0))
         pil_image = Image.fromarray(image_np)
         buffered = BytesIO()
