@@ -1,0 +1,290 @@
+import os
+import torch
+import numpy as np
+from PIL import Image
+import requests
+from io import BytesIO
+import json
+
+class JMSEEDreamT2INode:
+    """
+    调用火山引擎即梦API生成图片的节点
+    使用 doubao-seedream-3.0-t2i 模型
+    """
+    
+    # 预定义的模型ID选项
+    MODEL_IDS = {
+        "doubao-seedream-3.0-t2i (基础模型)": "doubao-seedream-3-0-t2i-250415"
+    }
+    
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "prompt": ("STRING", {
+                    "default": "一只可爱的猫咪", 
+                    "multiline": True,
+                    "dynamicPrompts": True
+                }),
+                "api_key": ("STRING", {
+                    "default": "",
+                    "multiline": False,
+                    "placeholder": "请输入您的火山引擎API Key"
+                }),
+                "model_selection": (list(cls.MODEL_IDS.keys()), {
+                    "default": "doubao-seedream-3.0-t2i (基础模型)"
+                }),
+                "width": ("INT", {
+                    "default": 1024,
+                    "min": 32,
+                    "max": 4096,
+                    "step": 32,
+                    "display": "number"
+                }),
+                "height": ("INT", {
+                    "default": 1024,
+                    "min": 32,
+                    "max": 4096,
+                    "step": 32,
+                    "display": "number"
+                }),
+                "seed": ("INT", {
+                    "default": -1,
+                    "min": -1,
+                    "max": 2147483647,
+                    "step": 1,
+                    "display": "number"
+                }),
+            },
+            "optional": {
+                "watermark": ("BOOLEAN", {
+                    "default": False,
+                    "label_on": "true",
+                    "label_off": "false",
+                    "tooltip": "是否在生成的图片中添加水印标识"
+                }),
+            }
+        }
+    
+    RETURN_TYPES = ("IMAGE",)
+    RETURN_NAMES = ("IMAGE",)
+    FUNCTION = "generate_image"
+    CATEGORY = "✨即梦AI生成"
+    DESCRIPTION = """使用火山引擎即梦API生成图片。
+    
+模型：doubao-seedream-3.0-t2i
+需要提供有效的API Key才能使用。
+
+如果遇到模型ID错误，请尝试：
+1. 在火山方舟控制台创建推理接入点
+2. 参考文档：https://www.volcengine.com/docs/82379/1301161
+    
+参数说明：
+- prompt: 图片生成的提示词
+- api_key: 火山引擎API密钥
+- model_selection: 模型选择
+- width: 生成图片的宽度（默认1024，范围32-4096，步长32）
+- height: 生成图片的高度（默认1024，范围32-4096，步长32）
+- seed: 随机种子（-1表示随机，有效范围：0-2147483647）
+- watermark: 是否在生成的图片中添加水印（默认为false，不添加水印）"""
+
+    def generate_image(self, prompt, api_key, model_selection="doubao-seedream-3.0-t2i (基础模型)", 
+                      width=1024, height=1024, seed=-1, watermark=False):
+        """调用火山引擎API生成图片"""
+        
+        # 优先读取apikey.txt
+        apikey_path = os.path.join(os.path.dirname(__file__), "apikey.txt")
+        file_api_key = ""
+        if os.path.exists(apikey_path):
+            with open(apikey_path, "r", encoding="utf-8") as f:
+                file_api_key = f.read().strip()
+        
+        use_api_key = file_api_key if file_api_key else api_key
+        if not use_api_key:
+            raise ValueError("请在apikey.txt或前端页面输入有效的API Key")
+        api_key = use_api_key
+        
+        # 设置默认值
+        response_format = "url"
+        api_endpoint = "https://ai-budxed1rqdd15m1oi.speedifyvolcai.com/api/v3"
+        debug_mode = False
+        n = 1  # 默认生成1张图片
+        
+        if not api_key:
+            raise ValueError("请提供有效的API Key")
+        
+        # 确定使用的模型ID
+        model_id = self.MODEL_IDS[model_selection]
+        
+        # 处理 api_endpoint 参数
+        if api_endpoint is None or api_endpoint == "" or api_endpoint == False or not isinstance(api_endpoint, str):
+            api_endpoint = "https://ai-budxed1rqdd15m1oi.speedifyvolcai.com/api/v3"
+        
+        # 额外的安全检查
+        api_endpoint = str(api_endpoint).strip()
+        if not api_endpoint or api_endpoint.lower() in ['false', 'none', 'null', '0']:
+            api_endpoint = "https://ai-budxed1rqdd15m1oi.speedifyvolcai.com/api/v3"
+        
+        # 准备请求头
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+        
+        # 处理尺寸参数 - 直接使用传入的width和height
+        actual_size = f"{width}x{height}"
+        
+        # 准备请求数据
+        data = {
+            "model": model_id,
+            "prompt": prompt,
+            "size": actual_size,
+            "n": n,
+            "response_format": response_format,
+            "watermark": watermark
+        }
+        
+        # 处理seed参数
+        if seed != -1:
+            # 确保seed在32位整数范围内
+            if seed < 0:
+                seed = 0
+            elif seed > 2147483647:
+                seed = seed % 2147483648
+            
+            if seed >= 0:
+                data["seed"] = int(seed)
+        
+        # 调试模式：打印请求信息
+        if debug_mode:
+            print("=" * 50)
+            print("即梦API调试信息")
+            print("=" * 50)
+            print(f"所有参数:")
+            print(f"  - prompt: {prompt}")
+            print(f"  - api_key: {'*' * (len(api_key) - 4) + api_key[-4:] if len(api_key) > 4 else '***'}")
+            print(f"  - model_selection: {model_selection}")
+            print(f"  - model_id: {model_id}")
+            print(f"  - api_endpoint: {api_endpoint}")
+            print(f"  - debug_mode: {debug_mode}")
+            print(f"  - seed (原始): {seed}")
+            print(f"  - seed (处理后): {'随机' if 'seed' not in data else data['seed']}")
+            print(f"  - width: {width}")
+            print(f"  - height: {height}")
+            print(f"  - size (处理后): {actual_size}")
+            print(f"  - watermark: {watermark}")
+            print("=" * 50)
+            print(f"API端点: {api_endpoint}/images/generations")
+            print(f"模型ID: {model_id}")
+            print(f"请求数据: {json.dumps(data, ensure_ascii=False, indent=2)}")
+            print("=" * 50)
+        
+        try:
+            # 发送请求
+            response = requests.post(
+                f"{api_endpoint}/images/generations",
+                headers=headers,
+                json=data,
+                timeout=300
+            )
+            
+            # 调试模式：打印响应信息
+            if debug_mode:
+                print(f"响应状态码: {response.status_code}")
+                print(f"响应内容: {response.text[:500]}...")
+                print("=" * 50)
+            
+            # 检查响应状态
+            if response.status_code != 200:
+                error_msg = f"API请求失败: {response.status_code}"
+                try:
+                    error_data = response.json()
+                    if "error" in error_data:
+                        error_msg += f" - {json.dumps(error_data['error'], ensure_ascii=False)}"
+                except:
+                    error_msg += f" - {response.text}"
+                
+                # 如果是模型ID错误，提供详细帮助信息
+                if "InvalidParameter" in response.text and "model" in response.text:
+                    error_msg += "\n\n可能的解决方案：\n"
+                    error_msg += "1. 在火山方舟控制台创建推理接入点\n"
+                    error_msg += "2. 使用推理接入点ID替代模型ID\n"
+                    error_msg += "3. 参考文档：https://www.volcengine.com/docs/82379/1301161"
+                
+                raise RuntimeError(error_msg)
+            
+            response.raise_for_status()
+            # 解析响应
+            result = response.json()
+            
+            # 调试：打印响应中的图片数量
+            if debug_mode:
+                print(f"API响应中包含 {len(result.get('data', []))} 个图片数据")
+                print(f"请求的图片数量: {n}")
+            
+            # 处理返回的图片
+            images = []
+            
+            if "data" in result:
+                for idx, img_data in enumerate(result["data"]):
+                    if debug_mode:
+                        print(f"处理第 {idx + 1} 张图片...")
+                    
+                    if response_format == "url":
+                        # 从URL下载图片
+                        img_url = img_data.get("url")
+                        if img_url:
+                            img_response = requests.get(img_url, timeout=300)
+                            img = Image.open(BytesIO(img_response.content))
+                    else:
+                        # 从base64解码图片
+                        import base64
+                        b64_string = img_data.get("b64_json")
+                        if b64_string:
+                            img_bytes = base64.b64decode(b64_string)
+                            img = Image.open(BytesIO(img_bytes))
+                    
+                    # 确保图片是RGB格式
+                    if img.mode != "RGB":
+                        img = img.convert("RGB")
+                    
+                    # 转换为tensor (B H W C格式)
+                    img_array = np.array(img).astype(np.float32) / 255.0
+                    img_tensor = torch.from_numpy(img_array)
+                    images.append(img_tensor)
+            
+            if not images:
+                raise ValueError("API未返回任何图片")
+            
+            # 将所有图片堆叠成一个batch (B H W C格式)
+            output_images = torch.stack(images, dim=0)
+            
+            print(f"成功生成 {len(images)} 张图片")
+            
+            return (output_images,)
+            
+        except requests.exceptions.RequestException as e:
+            if debug_mode:
+                print(f"请求异常: {str(e)}")
+            raise RuntimeError(f"API请求失败: {str(e)}")
+        except Exception as e:
+            if debug_mode:
+                print(f"生成错误: {str(e)}")
+            raise RuntimeError(f"生成图片时出错: {str(e)}")
+
+    @classmethod
+    def IS_CHANGED(cls, **kwargs):
+        """确保每次都重新执行（用于API调用）"""
+        return float("NaN")
+
+# 节点注册部分
+NODE_CLASS_MAPPINGS = {
+    "JM:Seeddream 3.0_t2i_v2": JMSEEDreamT2INode
+}
+
+NODE_DISPLAY_NAME_MAPPINGS = {
+    "JM:Seeddream 3.0_t2i_v2": "JM:Seeddream 3.0_t2i_v2"
+}
+
+# 导出
+__all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]

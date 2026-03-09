@@ -1,0 +1,8 @@
+__version__ = "1.0.2"
+
+# 初始化节点映射
+NODE_CLASS_MAPPINGS = {}
+NODE_DISPLAY_NAME_MAPPINGS = {}
+
+# 导出变量
+__all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
