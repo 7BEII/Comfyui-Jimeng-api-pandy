@@ -1,4 +1,4 @@
-import os
+﻿import os
 import torch
 import numpy as np
 from PIL import Image
@@ -28,8 +28,12 @@ class Seedream_Universal5:
     - 自动将总像素限制在 16777216 (API上限) 以内
     """
     
+    DEFAULT_MODEL_ID = "ep-20260709093223-gx4sn"
+    DEFAULT_MODEL_NAME = "Seedream 5.0 Pro (doubao-seedream-5-0-pro-260628)"
+
     MODEL_MAP = {
-        "Seedream 5.0 (doubao-seedream-5.0-lite-260128)": "ep-20260306163509-dxk6k",
+        DEFAULT_MODEL_NAME: DEFAULT_MODEL_ID,
+        "Seedream 5.0 (doubao-seedream-5.0-lite-260128)": "ep-20260428151640-9dfcd",
         "Seedream 4.5 (doubao-seedream-4-5-251128)": "doubao-seedream-4-5-251128",
         "Seedream 4.0 (doubao-seedream-4-0-250828)": "doubao-seedream-4-0-250828"
     }
@@ -62,8 +66,10 @@ class Seedream_Universal5:
         pil_image.save(buffered, format="PNG")
         return f"data:image/png;base64,{base64.b64encode(buffered.getvalue()).decode('utf-8')}"
     
-    def get_dimensions(self, aspect_ratio, resolution, max_pixels=16777216, min_pixels=3686400, ref_image=None):
+    def get_dimensions(self, aspect_ratio, resolution, max_pixels=16777216, min_pixels=3686400, ref_image=None, exact_sizes=None):
         """计算目标宽高，包含防超标逻辑"""
+        if exact_sizes and resolution in exact_sizes and aspect_ratio in exact_sizes[resolution]:
+            return exact_sizes[resolution][aspect_ratio]
         
         # API 严格上限
         MAX_PIXELS = max_pixels
@@ -102,7 +108,7 @@ class Seedream_Universal5:
             else:
                 w_ratio, h_ratio = (3, 4)
         else:
-            ratios = {"1:1":(1,1), "3:4":(3,4), "4:3":(4,3), "16:9":(16,9), "9:16":(9,16), "21:9":(21,9)}
+            ratios = {"1:1":(1,1), "2:3":(2,3), "3:2":(3,2), "3:4":(3,4), "4:3":(4,3), "16:9":(16,9), "9:16":(9,16), "21:9":(21,9)}
             w_ratio, h_ratio = ratios.get(aspect_ratio, (3, 4))
 
         # 3. 计算精确的 w, h
@@ -124,11 +130,12 @@ class Seedream_Universal5:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "model": (list(cls.MODEL_MAP.keys()), {"default": "Seedream 5.0 (doubao-seedream-5.0-lite-260128)"}),
+                "model": (list(cls.MODEL_MAP.keys()), {"default": cls.DEFAULT_MODEL_NAME}),
                 "prompt": ("STRING", {"multiline": True, "dynamicPrompts": True, "default": "Generate anime style"}),
                 "api_key": ("STRING", {"default": ""}),
+                "custom_model_id": ("STRING", {"default": "", "placeholder": "可选：填写 ep-xxx，留空使用默认 Pro endpoint"}),
                 "batch_size": ("INT", {"default": 1, "min": 1, "max": 4}),
-                "aspect_ratio": (["auto", "1:1", "3:4", "4:3", "16:9", "9:16", "21:9"], {"default": "3:4"}),
+                "aspect_ratio": (["auto", "1:1", "2:3", "3:2", "3:4", "4:3", "16:9", "9:16", "21:9"], {"default": "3:4"}),
                 "resolution": (["1K", "2K", "3K", "4K"], {"default": "2K"}),
                 "guidance_scale": ("FLOAT", {"default": 7.5, "min": 1.0, "max": 20.0, "step": 0.1}),
                 "watermark": ("BOOLEAN", {"default": False})
@@ -144,7 +151,7 @@ class Seedream_Universal5:
     FUNCTION = "generate_images"
     CATEGORY = "JM/AI生成"
 
-    def generate_images(self, model, prompt, api_key, batch_size, aspect_ratio, resolution, guidance_scale,
+    def generate_images(self, model, prompt, api_key, custom_model_id, batch_size, aspect_ratio, resolution, guidance_scale,
                        watermark=False, image1=None, image2=None, image3=None, image4=None):
         
         start_time = time.time()
@@ -154,10 +161,14 @@ class Seedream_Universal5:
             if os.path.exists(apikey_path):
                 with open(apikey_path, "r", encoding="utf-8") as f:
                     api_key = f.read().strip()
+        if not api_key:
+            api_key = os.environ.get("ARK_API_KEY", "").strip()
         if not api_key: raise ValueError("请填写 API Key")
 
-        model_id = self.MODEL_MAP.get(model, "ep-20260306163509-dxk6k")
+        model_id = custom_model_id.strip() if custom_model_id and custom_model_id.strip() else self.MODEL_MAP.get(model, self.DEFAULT_MODEL_ID)
         is_sd5 = "ep-202" in model_id or "seedream-5" in model_id
+        is_sd5_pro = "ep-" in model_id
+        use_pro_exact_sizes = "seedream-5-0-pro" in model_id or model_id == "ep-20260709093223-gx4sn"
         
         # 确定参考图
         ref_img = next((img for img in [image1, image2, image3, image4] if img is not None), None)
@@ -166,7 +177,16 @@ class Seedream_Universal5:
         max_pixels = 10404496 if is_sd5 else 16777216
         
         # 计算尺寸
-        width, height = self.get_dimensions(aspect_ratio, resolution, max_pixels=max_pixels, ref_image=ref_img)
+        exact_sizes = {
+            "1K": {
+                "1:1": (1488, 1488),
+                "2:3": (1216, 1824),
+                "3:4": (1216, 1824),
+                "3:2": (1824, 1216),
+                "4:3": (1824, 1216),
+            }
+        } if use_pro_exact_sizes else None
+        width, height = self.get_dimensions(aspect_ratio, resolution, max_pixels=max_pixels, ref_image=ref_img, exact_sizes=exact_sizes)
         
         print(f"🚀 生成参数: {model_id} | {width}x{height} (像素: {width*height}) | 限制: {max_pixels}")
 
@@ -194,7 +214,8 @@ class Seedream_Universal5:
                     data["image"] = self.tensor_to_base64(input_images[0])
                 else:
                     data["image"] = [self.tensor_to_base64(img) for img in input_images]
-                data["sequential_image_generation"] = "disabled"
+                if not is_sd5_pro:
+                    data["sequential_image_generation"] = "disabled"
 
             import concurrent.futures
             import comfy.model_management as mm
@@ -211,6 +232,34 @@ class Seedream_Universal5:
                 response = future.result()
             
             if response.status_code != 200:
+                error_text = response.text
+                try:
+                    error_info = response.json().get("error", {})
+                    error_text = error_info.get("message", response.text)
+                    error_param = str(error_info.get("param", "")).lower()
+                    error_code = str(error_info.get("code", "")).lower()
+                except Exception:
+                    error_param = ""
+                    error_code = ""
+
+                looks_like_model_error = (
+                    response.status_code in (400, 401, 403, 404)
+                    and (
+                        "model" in error_param
+                        or "model" in error_code
+                        or "endpoint" in error_code
+                        or "model" in error_text.lower()
+                        or "endpoint" in error_text.lower()
+                        or "not found" in error_text.lower()
+                        or "permission" in error_text.lower()
+                        or "unauthorized" in error_text.lower()
+                    )
+                )
+                if looks_like_model_error:
+                    raise RuntimeError(
+                        f"这个 model id/model key 不可用：{model_id}。请检查是否填了当前账号可用的 ep-xxx endpoint。原始错误: {error_text}"
+                    )
+
                 raise RuntimeError(f"API请求失败 ({response.status_code}): {response.text}")
 
             result = response.json()
@@ -238,3 +287,6 @@ class Seedream_Universal5:
 
 NODE_CLASS_MAPPINGS = { "JM:Seedream Universal (4.0/4.5/5.0)": Seedream_Universal5 }
 NODE_DISPLAY_NAME_MAPPINGS = { "JM:Seedream Universal (4.0/4.5/5.0)": "JM:Seedream Universal (4.0/4.5/5.0)" }
+
+
+
