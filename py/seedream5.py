@@ -28,12 +28,12 @@ class Seedream_Universal5:
     - 自动将总像素限制在 16777216 (API上限) 以内
     """
     
-    DEFAULT_MODEL_ID = "ep-20260709093223-gx4sn"
+    DEFAULT_MODEL_ID = "doubao-seedream-5-0-pro-260628"
     DEFAULT_MODEL_NAME = "Seedream 5.0 Pro (doubao-seedream-5-0-pro-260628)"
 
     MODEL_MAP = {
         DEFAULT_MODEL_NAME: DEFAULT_MODEL_ID,
-        "Seedream 5.0 (doubao-seedream-5.0-lite-260128)": "ep-20260428151640-9dfcd",
+        "Seedream 5.0 Lite (doubao-seedream-5-0-lite-260128)": "doubao-seedream-5-0-lite-260128",
         "Seedream 4.5 (doubao-seedream-4-5-251128)": "doubao-seedream-4-5-251128",
         "Seedream 4.0 (doubao-seedream-4-0-250828)": "doubao-seedream-4-0-250828"
     }
@@ -124,6 +124,16 @@ class Seedream_Universal5:
         if w < 64: w = 64
         if h < 64: h = 64
         
+        
+        # 向下对齐到 64 后，像素数可能重新低于当前模型的最小要求；补回到最小像素以上。
+        while w * h < MIN_PIXELS:
+            current_ratio = w / h
+            if current_ratio < ratio_val:
+                w += 64
+            else:
+                h += 64
+            if w * h > MAX_PIXELS:
+                break
         return w, h
 
     @classmethod
@@ -133,7 +143,6 @@ class Seedream_Universal5:
                 "model": (list(cls.MODEL_MAP.keys()), {"default": cls.DEFAULT_MODEL_NAME}),
                 "prompt": ("STRING", {"multiline": True, "dynamicPrompts": True, "default": "Generate anime style"}),
                 "api_key": ("STRING", {"default": ""}),
-                "custom_model_id": ("STRING", {"default": "", "placeholder": "可选：填写 ep-xxx，留空使用默认 Pro endpoint"}),
                 "batch_size": ("INT", {"default": 1, "min": 1, "max": 4}),
                 "aspect_ratio": (["auto", "1:1", "2:3", "3:2", "3:4", "4:3", "16:9", "9:16", "21:9"], {"default": "3:4"}),
                 "resolution": (["1K", "2K", "3K", "4K"], {"default": "2K"}),
@@ -151,7 +160,7 @@ class Seedream_Universal5:
     FUNCTION = "generate_images"
     CATEGORY = "JM/AI生成"
 
-    def generate_images(self, model, prompt, api_key, custom_model_id, batch_size, aspect_ratio, resolution, guidance_scale,
+    def generate_images(self, model, prompt, api_key, batch_size, aspect_ratio, resolution, guidance_scale,
                        watermark=False, image1=None, image2=None, image3=None, image4=None):
         
         start_time = time.time()
@@ -165,28 +174,42 @@ class Seedream_Universal5:
             api_key = os.environ.get("ARK_API_KEY", "").strip()
         if not api_key: raise ValueError("请填写 API Key")
 
-        model_id = custom_model_id.strip() if custom_model_id and custom_model_id.strip() else self.MODEL_MAP.get(model, self.DEFAULT_MODEL_ID)
-        is_sd5 = "ep-202" in model_id or "seedream-5" in model_id
-        is_sd5_pro = "ep-" in model_id
-        use_pro_exact_sizes = "seedream-5-0-pro" in model_id or model_id == "ep-20260709093223-gx4sn"
-        
+        model_id = self.MODEL_MAP.get(model, self.DEFAULT_MODEL_ID)
+        if "seedream-5-0-pro" in model_id:
+            model_profile = "seedream5_pro"
+            max_pixels = 10404496
+            min_pixels = 0
+            exact_sizes = {
+                "1K": {
+                    "1:1": (1488, 1488),
+                    "2:3": (1216, 1824),
+                    "3:4": (1216, 1824),
+                    "3:2": (1824, 1216),
+                    "4:3": (1824, 1216),
+                }
+            }
+            send_single_image_as_string = True
+            include_sequential_image_generation = False
+        elif "seedream-5-0-lite" in model_id or "seedream-5.0-lite" in model_id or "ep-202" in model_id:
+            model_profile = "seedream5_lite"
+            max_pixels = 10404496
+            min_pixels = 3686400
+            exact_sizes = None
+            send_single_image_as_string = True
+            include_sequential_image_generation = False
+        else:
+            model_profile = "seedream4"
+            max_pixels = 16777216
+            min_pixels = 3686400
+            exact_sizes = None
+            send_single_image_as_string = False
+            include_sequential_image_generation = True
+
         # 确定参考图
         ref_img = next((img for img in [image1, image2, image3, image4] if img is not None), None)
         
-        # Seedream 5.0 Lite 像素上限为 10404496, 4.0为 16777216
-        max_pixels = 10404496 if is_sd5 else 16777216
-        
-        # 计算尺寸
-        exact_sizes = {
-            "1K": {
-                "1:1": (1488, 1488),
-                "2:3": (1216, 1824),
-                "3:4": (1216, 1824),
-                "3:2": (1824, 1216),
-                "4:3": (1824, 1216),
-            }
-        } if use_pro_exact_sizes else None
-        width, height = self.get_dimensions(aspect_ratio, resolution, max_pixels=max_pixels, ref_image=ref_img, exact_sizes=exact_sizes)
+        # 按模型 profile 计算尺寸，避免 Pro/Lite/4.x 的规则互相影响。
+        width, height = self.get_dimensions(aspect_ratio, resolution, max_pixels=max_pixels, min_pixels=min_pixels, ref_image=ref_img, exact_sizes=exact_sizes)
         
         print(f"🚀 生成参数: {model_id} | {width}x{height} (像素: {width*height}) | 限制: {max_pixels}")
 
@@ -210,11 +233,11 @@ class Seedream_Universal5:
 
             if input_images:
                 # 官方 5.0 文档里单图传的是字符串，而不是列表
-                if is_sd5 and len(input_images) == 1:
+                if send_single_image_as_string and len(input_images) == 1:
                     data["image"] = self.tensor_to_base64(input_images[0])
                 else:
                     data["image"] = [self.tensor_to_base64(img) for img in input_images]
-                if not is_sd5_pro:
+                if include_sequential_image_generation:
                     data["sequential_image_generation"] = "disabled"
 
             import concurrent.futures
@@ -257,7 +280,7 @@ class Seedream_Universal5:
                 )
                 if looks_like_model_error:
                     raise RuntimeError(
-                        f"这个 model id/model key 不可用：{model_id}。请检查是否填了当前账号可用的 ep-xxx endpoint。原始错误: {error_text}"
+                        f"所选模型不可用：{model_id}。请检查 API Key 是否有该模型权限，或在节点下拉中切换可用模型。原始错误: {error_text}"
                     )
 
                 raise RuntimeError(f"API请求失败 ({response.status_code}): {response.text}")
@@ -287,6 +310,5 @@ class Seedream_Universal5:
 
 NODE_CLASS_MAPPINGS = { "JM:Seedream Universal (4.0/4.5/5.0)": Seedream_Universal5 }
 NODE_DISPLAY_NAME_MAPPINGS = { "JM:Seedream Universal (4.0/4.5/5.0)": "JM:Seedream Universal (4.0/4.5/5.0)" }
-
 
 
